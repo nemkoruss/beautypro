@@ -13,6 +13,7 @@ PHONE, NAME = range(2)
 class ClientHandler:
     def __init__(self):
         self.db = Database()
+        self.user_states = {}  # Для отслеживания состояний пользователей
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -66,12 +67,19 @@ class ClientHandler:
                 return
 
             keyboard = []
+            service_map = {}  # Для хранения соответствия текста кнопки и ID услуги
+
             for service in services:
                 service_id, name, price, duration = service
                 button_text = f"{name} - {price} руб. ({duration})"
                 keyboard.append([button_text])
+                service_map[button_text] = service_id
 
             keyboard.append(['Назад'])
+
+            # Сохраняем mapping для этого пользователя
+            user_id = update.effective_user.id
+            self.user_states[user_id] = {'service_map': service_map}
 
             text = f"Услуги в категории '{category_name}':\n\n"
             for service in services:
@@ -89,35 +97,29 @@ class ClientHandler:
 
     async def start_appointment(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            # Парсим информацию из текста кнопки
+            user_id = update.effective_user.id
             button_text = update.message.text
-            match = re.search(r'(.+?) - (\d+) руб.', button_text)
 
-            if match:
-                service_name = match.group(1).strip()
+            # Проверяем, есть ли mapping для этого пользователя
+            if user_id not in self.user_states or 'service_map' not in self.user_states[user_id]:
+                await update.message.reply_text("Пожалуйста, выберите услугу из меню.")
+                return ConversationHandler.END
 
-                # Находим service_id по имени услуги
-                services = []
-                categories = self.db.get_categories()
-                for cat_id, cat_name in categories:
-                    cat_services = self.db.get_services_by_category(cat_id)
-                    for service in cat_services:
-                        if service[1] == service_name:
-                            services.append(service)
+            service_map = self.user_states[user_id]['service_map']
 
-                if services:
-                    service_id = services[0][0]
-                    context.user_data['service_id'] = service_id
+            if button_text in service_map:
+                service_id = service_map[button_text]
+                context.user_data['service_id'] = service_id
 
-                    await update.message.reply_text(
-                        "Для записи на прием введите ваш номер телефона:",
-                        reply_markup=ReplyKeyboardRemove()
-                    )
+                await update.message.reply_text(
+                    "Для записи на прием введите ваш номер телефона:",
+                    reply_markup=ReplyKeyboardRemove()
+                )
 
-                    return PHONE
-
-            await update.message.reply_text("Ошибка выбора услуги.")
-            return ConversationHandler.END
+                return PHONE
+            else:
+                await update.message.reply_text("Пожалуйста, выберите услугу из меню.")
+                return ConversationHandler.END
 
         except Exception as e:
             logger.error(f"Ошибка в start_appointment: {e}")
@@ -180,6 +182,11 @@ class ClientHandler:
                 )
                 logger.info(admin_message)
 
+            # Очищаем состояние пользователя
+            user_id = update.effective_user.id
+            if user_id in self.user_states:
+                del self.user_states[user_id]
+
             return ConversationHandler.END
 
         except Exception as e:
@@ -188,6 +195,11 @@ class ClientHandler:
             return ConversationHandler.END
 
     async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # Очищаем состояние пользователя
+        user_id = update.effective_user.id
+        if user_id in self.user_states:
+            del self.user_states[user_id]
+
         await update.message.reply_text(
             "Запись отменена.",
             reply_markup=ReplyKeyboardMarkup([['/start']], resize_keyboard=True)
@@ -204,4 +216,16 @@ class ClientHandler:
         await update.message.reply_text(f"📍 Наш адрес: {Config.MAP_COORDINATES}")
 
     async def back_to_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # Очищаем состояние пользователя
+        user_id = update.effective_user.id
+        if user_id in self.user_states:
+            del self.user_states[user_id]
+
         await self.start(update, context)
+
+    async def handle_unknown(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработчик для неизвестных сообщений"""
+        await update.message.reply_text(
+            "Пожалуйста, используйте кнопки меню для навигации.",
+            reply_markup=ReplyKeyboardMarkup([['/start']], resize_keyboard=True)
+        )

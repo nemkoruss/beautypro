@@ -35,7 +35,7 @@ class BeautyBot:
 
             # ConversationHandler для записи на прием
             appointment_conv = ConversationHandler(
-                entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, self.client_handler.start_appointment)],
+                entry_points=[MessageHandler(filters.Regex(r'.+ - \d+ руб\. .+'), self.client_handler.start_appointment)],
                 states={
                     PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.client_handler.get_phone)],
                     NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.client_handler.get_name)],
@@ -69,6 +69,9 @@ class BeautyBot:
 
             self.application.add_handler(MessageHandler(filters.Regex(r'^В главное меню$'),
                                                       self.client_handler.start))
+
+            # Обработчик для любых других сообщений
+            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.client_handler.handle_unknown))
 
             logger.info("Все обработчики установлены")
 
