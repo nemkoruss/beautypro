@@ -1,64 +1,104 @@
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
-from telegram import Update
-from telegram.ext import ContextTypes
 import logging
-from config import config
-from client import conv_handler, start, handle_category, handle_contact_info
-from admin import admin_command, admin_conv_handler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler
+from config import Config
+from client import ClientHandler, PHONE, NAME
+from admin import AdminHandler
 
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
-    filename='bot.log'
+    filename='bot.log',
+    encoding='utf-8'
 )
-
 logger = logging.getLogger(__name__)
 
-def main():
-    """Основная функция запуска бота"""
-    # Проверка конфигурации
-    config_status = config.check_config()
-    missing_configs = [key for key, value in config_status.items() if not value]
+class BeautyBot:
+    def __init__(self):
+        self.client_handler = ClientHandler()
+        self.admin_handler = AdminHandler()
 
-    if missing_configs:
-        logger.error(f"Отсутствуют конфигурационные параметры: {', '.join(missing_configs)}")
-        print(f"Ошибка: отсутствуют конфигурационные параметры: {', '.join(missing_configs)}")
-        return
+        try:
+            self.application = Application.builder().token(Config.BOT_TOKEN).build()
+            logger.info("Приложение бота создано успешно")
+        except Exception as e:
+            logger.error(f"Ошибка создания приложения: {e}")
+            raise
 
-    if not config.BOT_TOKEN:
-        logger.error("Токен бота не установлен!")
-        print("Ошибка: токен бота не установлен!")
-        return
+    def setup_handlers(self):
+        try:
+            # Обработчик команды /start
+            self.application.add_handler(CommandHandler("start", self.client_handler.start))
 
-    # Создание приложения
-    application = Application.builder().token(config.BOT_TOKEN).build()
+            # Обработчик команды /admin
+            self.application.add_handler(CommandHandler("admin", self.admin_handler.admin_panel))
 
-    # Добавление обработчиков
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("admin", admin_command))
-    application.add_handler(conv_handler)
-    application.add_handler(admin_conv_handler)
+            # ConversationHandler для записи на прием
+            appointment_conv = ConversationHandler(
+                entry_points=[MessageHandler(filters.TEXT & ~filters.COMMAND, self.client_handler.start_appointment)],
+                states={
+                    PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.client_handler.get_phone)],
+                    NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.client_handler.get_name)],
+                },
+                fallbacks=[CommandHandler("cancel", self.client_handler.cancel)]
+            )
+            self.application.add_handler(appointment_conv)
 
-    # Обработчики категорий
-    application.add_handler(MessageHandler(filters.Regex('^(Маникюр|Педикюр|Наращивание)$'), handle_category))
+            # Обработчики основных кнопок
+            self.application.add_handler(MessageHandler(filters.Regex(r'^(Маникюр|Педикюр|Наращивание)$'),
+                                                      self.client_handler.show_services))
 
-    # Обработчики контактной информации
-    application.add_handler(MessageHandler(
-        filters.Regex('^(Адрес студии|Перейти в телеграм-канал|Перейти на сайт|Позвонить)$'),
-        handle_contact_info
-    ))
+            self.application.add_handler(MessageHandler(filters.Regex(r'^Перейти в телеграм-канал$'),
+                                                      self.client_handler.show_telegram_channel))
 
-    # Обработчик неизвестных команд
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unknown))
+            self.application.add_handler(MessageHandler(filters.Regex(r'^Перейти на сайт$'),
+                                                      self.client_handler.show_website))
 
-    # Запуск бота
-    print("Бот запущен...")
-    application.run_polling()
+            self.application.add_handler(MessageHandler(filters.Regex(r'^Адрес студии$'),
+                                                      self.client_handler.show_address))
 
-async def handle_unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик неизвестных команд"""
-    await update.message.reply_text("Извините, я не понимаю эту команду. Используйте /start для начала.")
+            self.application.add_handler(MessageHandler(filters.Regex(r'^Назад$'),
+                                                      self.client_handler.back_to_start))
 
-if __name__ == '__main__':
-    main()
+            # Административные обработчики
+            self.application.add_handler(MessageHandler(filters.Regex(r'^Список клиентов$'),
+                                                      self.admin_handler.show_clients))
+
+            self.application.add_handler(MessageHandler(filters.Regex(r'^Записи за 30 дней$'),
+                                                      self.admin_handler.show_appointments))
+
+            self.application.add_handler(MessageHandler(filters.Regex(r'^В главное меню$'),
+                                                      self.client_handler.start))
+
+            logger.info("Все обработчики установлены")
+
+        except Exception as e:
+            logger.error(f"Ошибка установки обработчиков: {e}")
+            raise
+
+    def run(self):
+        try:
+            self.setup_handlers()
+            logger.info("Бот запускается...")
+            print("Бот запущен! Для остановки нажмите Ctrl+C")
+            self.application.run_polling()
+        except Exception as e:
+            logger.error(f"Ошибка запуска бота: {e}")
+            raise
+
+if __name__ == "__main__":
+    try:
+        # Проверяем конфигурацию
+        config_status = Config.check_config()
+        print("Статус конфигурации:", config_status)
+
+        if not all(config_status.values()):
+            print("ВНИМАНИЕ: Не все переменные окружения загружены!")
+            print("Проверьте файл .env")
+
+        bot = BeautyBot()
+        bot.run()
+
+    except Exception as e:
+        logger.critical(f"Критическая ошибка: {e}")
+        print(f"Ошибка: {e}")

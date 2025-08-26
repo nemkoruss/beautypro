@@ -1,46 +1,45 @@
 import sqlite3
 import logging
-from datetime import datetime
-from config import config
+from datetime import datetime, timedelta
 
-# Настройка логирования
-logging.basicConfig(
-    filename='bot.log',
-    level=logging.ERROR,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logger = logging.getLogger(__name__)
 
 class Database:
-    def __init__(self):
-        self.db_name = config.DATABASE_NAME
+    def __init__(self, db_name='beauty_bot.db'):
+        self.db_name = db_name
         self.init_db()
 
     def get_connection(self):
-        """Создание соединения с базой данных"""
         try:
             conn = sqlite3.connect(self.db_name)
             conn.row_factory = sqlite3.Row
             return conn
         except sqlite3.Error as e:
-            logging.error(f"Ошибка подключения к БД: {e}")
-            return None
+            logger.error(f"Database connection error: {e}")
+            raise
 
     def init_db(self):
-        """Инициализация таблиц базы данных"""
         try:
-            conn = self.get_connection()
-            if conn:
+            with self.get_connection() as conn:
                 cursor = conn.cursor()
+
+                # Таблица категорий
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS categories (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL UNIQUE
+                    )
+                ''')
 
                 # Таблица услуг
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS services (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        category TEXT NOT NULL,
+                        category_id INTEGER,
                         name TEXT NOT NULL,
-                        price INTEGER NOT NULL,
+                        price REAL NOT NULL,
                         duration TEXT NOT NULL,
-                        is_active BOOLEAN DEFAULT TRUE
+                        FOREIGN KEY (category_id) REFERENCES categories (id)
                     )
                 ''')
 
@@ -48,188 +47,219 @@ class Database:
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS clients (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id INTEGER NOT NULL,
                         name TEXT NOT NULL,
                         phone TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+
+                # Таблица записей
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS appointments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        client_id INTEGER,
                         service_id INTEGER,
-                        appointment_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         status TEXT DEFAULT 'pending',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (client_id) REFERENCES clients (id),
                         FOREIGN KEY (service_id) REFERENCES services (id)
                     )
                 ''')
 
-                # Вставка начальных данных
-                self._insert_initial_data(cursor)
+                # Добавляем начальные данные
+                self._add_initial_data(cursor)
 
                 conn.commit()
-                conn.close()
+                logger.info("База данных инициализирована успешно")
 
-        except sqlite3.Error as e:
-            logging.error(f"Ошибка инициализации БД: {e}")
+        except Exception as e:
+            logger.error(f"Error initializing database: {e}")
+            raise
 
-    def _insert_initial_data(self, cursor):
-        """Вставка начальных данных услуг"""
-        # Проверяем, есть ли уже данные
-        cursor.execute("SELECT COUNT(*) FROM services")
-        count = cursor.fetchone()[0]
+    def _add_initial_data(self, cursor):
+        try:
+            # Добавляем категории
+            categories = ['Маникюр', 'Педикюр', 'Наращивание']
+            for category in categories:
+                cursor.execute('INSERT OR IGNORE INTO categories (name) VALUES (?)', (category,))
 
-        if count == 0:
-            initial_services = [
-                ('Маникюр', 'Классический', 1500, '3 часа'),
-                ('Маникюр', 'Гель-лак', 2500, '5 часов'),
-                ('Маникюр', 'Аппаратный', 3500, '2 часа'),
-                ('Педикюр', 'Аппаратный', 1000, '30 минут'),
-                ('Наращивание', 'Верхние формы', 3000, '2 часа'),
-                ('Наращивание', 'Типсы', 1500, '1.5 часа')
+            # Получаем ID категорий
+            cursor.execute('SELECT id, name FROM categories')
+            category_map = {name: id for id, name in cursor.fetchall()}
+
+            # Добавляем начальные услуги
+            services_data = [
+                (category_map['Маникюр'], 'Классический', 1500.0, '3 часа'),
+                (category_map['Маникюр'], 'Гель-лак', 2500.0, '5 часов'),
+                (category_map['Маникюр'], 'Аппаратный', 3500.0, '2 часа'),
+                (category_map['Педикюр'], 'Аппаратный', 1000.0, '30 минут'),
+                (category_map['Наращивание'], 'Верхние формы', 3000.0, '2 часа'),
+                (category_map['Наращивание'], 'Типсы', 1500.0, '1.5 часа')
             ]
 
-            cursor.executemany(
-                "INSERT INTO services (category, name, price, duration) VALUES (?, ?, ?, ?)",
-                initial_services
-            )
+            for service in services_data:
+                cursor.execute('''
+                    INSERT OR IGNORE INTO services (category_id, name, price, duration)
+                    VALUES (?, ?, ?, ?)
+                ''', service)
 
-    def get_services_by_category(self, category):
-        """Получение услуг по категории"""
+        except Exception as e:
+            logger.error(f"Error adding initial data: {e}")
+            raise
+
+    # Методы для работы с категориями
+    def get_categories(self):
         try:
-            conn = self.get_connection()
-            if conn:
+            with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT * FROM services WHERE category = ? AND is_active = TRUE ORDER BY name",
-                    (category,)
-                )
-                services = cursor.fetchall()
-                conn.close()
-                return services
-        except sqlite3.Error as e:
-            logging.error(f"Ошибка получения услуг: {e}")
+                cursor.execute('SELECT id, name FROM categories ORDER BY id')
+                return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Error getting categories: {e}")
             return []
 
-    def get_service_by_id(self, service_id):
-        """Получение услуги по ID"""
+    def get_category_name(self, category_id):
         try:
-            conn = self.get_connection()
-            if conn:
+            with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT * FROM services WHERE id = ? AND is_active = TRUE",
-                    (service_id,)
-                )
-                service = cursor.fetchone()
-                conn.close()
-                return service
-        except sqlite3.Error as e:
-            logging.error(f"Ошибка получения услуги: {e}")
+                cursor.execute('SELECT name FROM categories WHERE id = ?', (category_id,))
+                result = cursor.fetchone()
+                return result['name'] if result else None
+        except Exception as e:
+            logger.error(f"Error getting category name: {e}")
             return None
 
-    def add_client(self, user_id, name, phone, service_id):
-        """Добавление клиента"""
+    # Методы для работы с услугами
+    def get_services_by_category(self, category_id):
         try:
-            conn = self.get_connection()
-            if conn:
+            with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "INSERT INTO clients (user_id, name, phone, service_id) VALUES (?, ?, ?, ?)",
-                    (user_id, name, phone, service_id)
-                )
-                conn.commit()
-                client_id = cursor.lastrowid
-                conn.close()
-                return client_id
-        except sqlite3.Error as e:
-            logging.error(f"Ошибка добавления клиента: {e}")
+                cursor.execute('''
+                    SELECT id, name, price, duration
+                    FROM services
+                    WHERE category_id = ?
+                    ORDER BY id
+                ''', (category_id,))
+                return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Error getting services: {e}")
+            return []
+
+    def get_service(self, service_id):
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT s.id, s.name, s.price, s.duration, c.name as category_name
+                    FROM services s
+                    JOIN categories c ON s.category_id = c.id
+                    WHERE s.id = ?
+                ''', (service_id,))
+                result = cursor.fetchone()
+                if result:
+                    return (result['id'], result['name'], result['price'],
+                           result['duration'], result['category_name'])
+                return None
+        except Exception as e:
+            logger.error(f"Error getting service: {e}")
             return None
-
-    def get_all_clients(self):
-        """Получение всех клиентов"""
-        try:
-            conn = self.get_connection()
-            if conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT c.*, s.category, s.name as service_name, s.price, s.duration
-                    FROM clients c
-                    LEFT JOIN services s ON c.service_id = s.id
-                    ORDER BY c.appointment_date DESC
-                ''')
-                clients = cursor.fetchall()
-                conn.close()
-                return clients
-        except sqlite3.Error as e:
-            logging.error(f"Ошибка получения клиентов: {e}")
-            return []
-
-    def get_recent_clients(self, days=30):
-        """Получение клиентов за последние дни"""
-        try:
-            conn = self.get_connection()
-            if conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT c.*, s.category, s.name as service_name, s.price, s.duration
-                    FROM clients c
-                    LEFT JOIN services s ON c.service_id = s.id
-                    WHERE date(c.appointment_date) >= date('now', ?)
-                    ORDER BY c.appointment_date DESC
-                ''', (f'-{days} days',))
-                clients = cursor.fetchall()
-                conn.close()
-                return clients
-        except sqlite3.Error as e:
-            logging.error(f"Ошибка получения клиентов: {e}")
-            return []
 
     def update_service(self, service_id, name, price, duration):
-        """Обновление услуги"""
         try:
-            conn = self.get_connection()
-            if conn:
+            with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE services SET name = ?, price = ?, duration = ? WHERE id = ?",
-                    (name, price, duration, service_id)
-                )
+                cursor.execute('''
+                    UPDATE services
+                    SET name = ?, price = ?, duration = ?
+                    WHERE id = ?
+                ''', (name, price, duration, service_id))
                 conn.commit()
-                conn.close()
                 return True
-        except sqlite3.Error as e:
-            logging.error(f"Ошибка обновления услуги: {e}")
+        except Exception as e:
+            logger.error(f"Error updating service: {e}")
             return False
 
     def delete_service(self, service_id):
-        """Удаление услуги (деактивация)"""
         try:
-            conn = self.get_connection()
-            if conn:
+            with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE services SET is_active = FALSE WHERE id = ?",
-                    (service_id,)
-                )
+                cursor.execute('DELETE FROM services WHERE id = ?', (service_id,))
                 conn.commit()
-                conn.close()
                 return True
-        except sqlite3.Error as e:
-            logging.error(f"Ошибка удаления услуги: {e}")
+        except Exception as e:
+            logger.error(f"Error deleting service: {e}")
             return False
 
-    def add_service(self, category, name, price, duration):
-        """Добавление новой услуги"""
+    def add_service(self, category_id, name, price, duration):
         try:
-            conn = self.get_connection()
-            if conn:
+            with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "INSERT INTO services (category, name, price, duration) VALUES (?, ?, ?, ?)",
-                    (category, name, price, duration)
-                )
+                cursor.execute('''
+                    INSERT INTO services (category_id, name, price, duration)
+                    VALUES (?, ?, ?, ?)
+                ''', (category_id, name, price, duration))
                 conn.commit()
-                service_id = cursor.lastrowid
-                conn.close()
-                return service_id
-        except sqlite3.Error as e:
-            logging.error(f"Ошибка добавления услуги: {e}")
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"Error adding service: {e}")
             return None
 
-# Создаем экземпляр базы данных
-db = Database()
+    # Методы для работы с клиентами
+    def add_client(self, name, phone):
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO clients (name, phone)
+                    VALUES (?, ?)
+                ''', (name, phone))
+                conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"Error adding client: {e}")
+            return None
+
+    def get_clients(self):
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT id, name, phone, created_at FROM clients ORDER BY created_at DESC')
+                return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Error getting clients: {e}")
+            return []
+
+    # Методы для работы с записями
+    def add_appointment(self, client_id, service_id):
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO appointments (client_id, service_id)
+                    VALUES (?, ?)
+                ''', (client_id, service_id))
+                conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"Error adding appointment: {e}")
+            return None
+
+    def get_appointments_last_30_days(self):
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')
+                cursor.execute('''
+                    SELECT a.id, c.name, c.phone, s.name as service_name,
+                           s.price, s.duration, cat.name as category_name, a.created_at
+                    FROM appointments a
+                    JOIN clients c ON a.client_id = c.id
+                    JOIN services s ON a.service_id = s.id
+                    JOIN categories cat ON s.category_id = cat.id
+                    WHERE a.created_at >= ?
+                    ORDER BY a.created_at DESC
+                ''', (thirty_days_ago,))
+                return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Error getting appointments: {e}")
+            return []
