@@ -1,193 +1,232 @@
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, filters
 import logging
-from config import Config
-from database import Database
+from config import config
+from database import db
 
-logger = logging.getLogger(__name__)
+# Состояния для админских ConversationHandler
+ADMIN_ACTION, EDIT_SERVICE, DELETE_SERVICE, ADD_SERVICE, BROADCAST_MESSAGE = range(5)
 
-# Admin states
-ADMIN_MAIN, SELECT_CATEGORY, SELECT_SERVICE, EDIT_SERVICE, ADD_SERVICE_CATEGORY, ADD_SERVICE_NAME, ADD_SERVICE_PRICE, ADD_SERVICE_DURATION = range(8)
+# Настройка логирования
+logging.basicConfig(
+    filename='bot.log',
+    level=logging.ERROR,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
-db = Database()
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /admin"""
+    user_id = update.effective_user.id
 
-async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in Config.ADMIN_IDS:
-        await update.message.reply_text("Доступ запрещен.")
+    if user_id not in config.ADMIN_IDS:
+        await update.message.reply_text("У вас нет прав доступа к админ-панели.")
         return
 
+    await show_admin_menu(update, context)
+
+async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показ админского меню"""
     keyboard = [
         ['Изменить услугу', 'Удалить услугу'],
         ['Добавить услугу', 'Информационное сообщение'],
         ['Посмотреть список клиентов', 'Посмотреть записи'],
-        ['Выйти из админки']
+        ['В главное меню']
     ]
 
-    await update.message.reply_text(
-        "Панель администратора:",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    )
-    return ADMIN_MAIN
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-async def handle_admin_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    choice = update.message.text
+    if update.message:
+        await update.message.reply_text("Админ-панель:", reply_markup=reply_markup)
+    else:
+        await update.callback_query.message.reply_text("Админ-панель:", reply_markup=reply_markup)
 
-    if choice == 'Изменить услугу':
-        categories = db.get_all_categories()
-        keyboard = [[category] for category in categories]
-        keyboard.append(['Назад'])
+    return ADMIN_ACTION
 
-        await update.message.reply_text(
-            "Выберите категорию для изменения:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        return SELECT_CATEGORY
+async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка действий в админ-панели"""
+    action = update.message.text
 
-    elif choice == 'Удалить услугу':
-        categories = db.get_all_categories()
-        keyboard = [[category] for category in categories]
-        keyboard.append(['Назад'])
-
-        await update.message.reply_text(
-            "Выберите категорию для удаления:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        return SELECT_CATEGORY
-
-    elif choice == 'Добавить услугу':
-        categories = db.get_all_categories()
-        keyboard = [[category] for category in categories]
-        keyboard.append(['Назад'])
-
-        await update.message.reply_text(
-            "Выберите категорию для добавления услуги:",
-            reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        )
-        return ADD_SERVICE_CATEGORY
-
-    elif choice == 'Информационное сообщение':
-        await update.message.reply_text(
-            "Введите сообщение для рассылки:",
-            reply_markup=ReplyKeyboardMarkup([['Отмена']], resize_keyboard=True)
-        )
-        # This would need additional implementation for broadcasting
-
-    elif choice == 'Посмотреть список клиентов':
-        clients = db.get_all_clients()
-        if clients:
-            message = "📋 Список всех клиентов:\n\n"
-            for client in clients:
-                message += f"ID: {client[0]}\nИмя: {client[1]}\nТелефон: {client[2]}\nУслуга: {client[4]} ({client[3]})\nЦена: {client[5]} руб.\nДата: {client[7]}\nСтатус: {client[8]}\n\n"
-            await update.message.reply_text(message[:4000])
-        else:
-            await update.message.reply_text("Клиентов пока нет.")
-
-    elif choice == 'Посмотреть записи':
-        clients = db.get_recent_clients(30)
-        if clients:
-            message = "📅 Записи за последние 30 дней:\n\n"
-            for client in clients:
-                message += f"ID: {client[0]}\nИмя: {client[1]}\nТелефон: {client[2]}\nУслуга: {client[4]} ({client[3]})\nЦена: {client[5]} руб.\nДата: {client[7]}\nСтатус: {client[8]}\n\n"
-            await update.message.reply_text(message[:4000])
-        else:
-            await update.message.reply_text("Записей за последние 30 дней нет.")
-
-    elif choice == 'Выйти из админки':
-        await update.message.reply_text(
-            "Вы вышли из панели администратора.",
-            reply_markup=ReplyKeyboardRemove()
-        )
+    if action == 'В главное меню':
+        from client import show_main_menu
+        await show_main_menu(update, context)
         return ConversationHandler.END
 
-async def handle_category_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    elif action == 'Изменить услугу':
+        await show_categories_for_edit(update, context)
+        return EDIT_SERVICE
+
+    elif action == 'Удалить услугу':
+        await show_categories_for_delete(update, context)
+        return DELETE_SERVICE
+
+    elif action == 'Добавить услугу':
+        await show_categories_for_add(update, context)
+        return ADD_SERVICE
+
+    elif action == 'Информационное сообщение':
+        await update.message.reply_text(
+            "Введите сообщение для рассылки всем клиентам:",
+            reply_markup=ReplyKeyboardMarkup([['Отмена']], resize_keyboard=True)
+        )
+        return BROADCAST_MESSAGE
+
+    elif action == 'Посмотреть список клиентов':
+        clients = db.get_all_clients()
+        await send_clients_list(update, clients, "Все клиенты:")
+
+    elif action == 'Посмотреть записи':
+        clients = db.get_recent_clients(30)
+        await send_clients_list(update, clients, "Записи за последние 30 дней:")
+
+async def show_categories_for_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показ категорий для редактирования"""
+    keyboard = [['Маникюр', 'Педикюр'], ['Наращивание', 'Назад']]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text("Выберите категорию для редактирования:", reply_markup=reply_markup)
+
+async def show_services_for_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показ услуг для редактирования"""
     category = update.message.text
-    context.user_data['admin_category'] = category
+
+    if category == 'Назад':
+        await show_admin_menu(update, context)
+        return ADMIN_ACTION
 
     services = db.get_services_by_category(category)
-    keyboard = [[service[1]] for service in services]
+
+    if not services:
+        await update.message.reply_text("В этой категории нет услуг.")
+        return EDIT_SERVICE
+
+    keyboard = []
+    for service in services:
+        keyboard.append([f"{service['name']} (ID: {service['id']})"])
     keyboard.append(['Назад'])
 
-    await update.message.reply_text(
-        f"Выберите услугу в категории '{category}':",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    )
-    return SELECT_SERVICE
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    await update.message.reply_text(f"Услуги {category}:", reply_markup=reply_markup)
 
-async def handle_service_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    service_name = update.message.text
-    category = context.user_data['admin_category']
+    context.user_data['edit_category'] = category
+    return EDIT_SERVICE
 
-    services = db.get_services_by_category(category)
-    selected_service = None
+async def handle_service_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка редактирования услуги"""
+    service_text = update.message.text
 
-    for service in services:
-        if service[1] == service_name:
-            selected_service = service
-            break
+    if service_text == 'Назад':
+        await show_categories_for_edit(update, context)
+        return EDIT_SERVICE
 
-    if not selected_service:
+    # Извлекаем ID услуги
+    try:
+        service_id = int(service_text.split('(ID: ')[1].split(')')[0])
+    except:
+        await update.message.reply_text("Неверный формат услуги.")
+        return EDIT_SERVICE
+
+    service = db.get_service_by_id(service_id)
+    if not service:
         await update.message.reply_text("Услуга не найдена.")
-        return ADMIN_MAIN
+        return EDIT_SERVICE
 
-    context.user_data['admin_service'] = selected_service
+    context.user_data['edit_service_id'] = service_id
+    context.user_data['edit_service'] = service
 
     await update.message.reply_text(
-        f"Услуга: {selected_service[1]}\n"
-        f"Цена: {selected_service[2]} руб.\n"
-        f"Время: {selected_service[3]}\n\n"
+        f"Редактирование услуги: {service['name']}\n\n"
+        f"Текущие данные:\n"
+        f"Название: {service['name']}\n"
+        f"Цена: {service['price']} руб.\n"
+        f"Время: {service['duration']}\n\n"
         "Введите новое название услуги:",
         reply_markup=ReplyKeyboardRemove()
     )
+
     return EDIT_SERVICE
 
-async def edit_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_service_name_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка нового названия услуги"""
     new_name = update.message.text
     context.user_data['new_service_name'] = new_name
 
-    await update.message.reply_text("Введите новую цену услуги:")
+    await update.message.reply_text("Введите новую цену услуги (только цифры):")
     return EDIT_SERVICE
 
-async def add_service_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    category = update.message.text
-    context.user_data['new_service_category'] = category
-
-    await update.message.reply_text("Введите название новой услуги:")
-    return ADD_SERVICE_NAME
-
-async def add_service_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = update.message.text
-    context.user_data['new_service_name'] = name
-
-    await update.message.reply_text("Введите цену услуги:")
-    return ADD_SERVICE_PRICE
-
-async def add_service_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_service_price_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка новой цены услуги"""
     try:
-        price = int(update.message.text)
-        context.user_data['new_service_price'] = price
-
-        await update.message.reply_text("Введите время оказания услуги (например, '2 часа'):")
-        return ADD_SERVICE_DURATION
+        new_price = int(update.message.text)
     except ValueError:
-        await update.message.reply_text("Пожалуйста, введите корректную цену (число):")
-        return ADD_SERVICE_PRICE
+        await update.message.reply_text("Пожалуйста, введите корректную цену (только цифры):")
+        return EDIT_SERVICE
 
-async def add_service_duration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    duration = update.message.text
-    category = context.user_data['new_service_category']
-    name = context.user_data['new_service_name']
-    price = context.user_data['new_service_price']
+    context.user_data['new_service_price'] = new_price
 
-    if db.add_service(category, name, price, duration):
-        await update.message.reply_text("✅ Услуга успешно добавлена!")
+    await update.message.reply_text("Введите новое время оказания услуги (например: '2 часа'):")
+    return EDIT_SERVICE
+
+async def handle_service_duration_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка нового времени услуги и сохранение"""
+    new_duration = update.message.text
+    service_id = context.user_data.get('edit_service_id')
+    new_name = context.user_data.get('new_service_name')
+    new_price = context.user_data.get('new_service_price')
+
+    if not all([service_id, new_name, new_price, new_duration]):
+        await update.message.reply_text("Произошла ошибка. Пожалуйста, начните заново.")
+        return await show_admin_menu(update, context)
+
+    # Обновляем услугу в базе данных
+    success = db.update_service(service_id, new_name, new_price, new_duration)
+
+    if success:
+        await update.message.reply_text("✅ Услуга успешно обновлена!")
     else:
-        await update.message.reply_text("❌ Ошибка при добавлении услуги.")
+        await update.message.reply_text("❌ Ошибка при обновлении услуги.")
 
-    return ConversationHandler.END
+    await show_admin_menu(update, context)
+    return ADMIN_ACTION
 
-async def admin_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Аналогичные функции для удаления и добавления услуг будут реализованы по аналогии
+
+async def send_clients_list(update: Update, clients, title):
+    """Отправка списка клиентов"""
+    if not clients:
+        await update.message.reply_text("Клиентов не найдено.")
+        return
+
+    message = f"{title}\n\n"
+    for i, client in enumerate(clients, 1):
+        message += (
+            f"{i}. {client['name']} - {client['phone']}\n"
+            f"   Услуга: {client.get('service_name', 'Не указана')}\n"
+            f"   Дата: {client['appointment_date']}\n"
+            f"   Статус: {client['status']}\n\n"
+        )
+
+    # Разбиваем сообщение на части, если оно слишком длинное
+    if len(message) > 4096:
+        for i in range(0, len(message), 4096):
+            await update.message.reply_text(message[i:i+4096])
+    else:
+        await update.message.reply_text(message)
+
+async def cancel_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена админской операции"""
     await update.message.reply_text(
-        "Действие отменено.",
-        reply_markup=ReplyKeyboardMarkup([['/admin']], resize_keyboard=True)
+        "Операция отменена.",
+        reply_markup=ReplyKeyboardRemove()
     )
+    await show_admin_menu(update, context)
     return ConversationHandler.END
+
+# ConversationHandler для админских операций
+admin_conv_handler = ConversationHandler(
+    entry_points=[MessageHandler(filters.Regex('^(Изменить услугу|Удалить услугу|Добавить услугу|Информационное сообщение)$'), handle_admin_action)],
+    states={
+        ADMIN_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_action)],
+        EDIT_SERVICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_service_edit)],
+        # Добавить остальные состояния...
+    },
+    fallbacks=[MessageHandler(filters.Regex('^Отмена$'), cancel_admin)]
+)

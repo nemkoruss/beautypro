@@ -1,57 +1,83 @@
 #!/bin/bash
 
-# Update and upgrade system
-echo "Updating system..."
+# Скрипт установки для телеграм бота студии маникюра
+
+echo "🐾 Начинаем установку бота для студии маникюра..."
+
+# Обновление системы
+echo "🔄 Обновление системы..."
 sudo apt update && sudo apt upgrade -y
 
-# Check and install git
+# Проверка и установка необходимых пакетов
+echo "🔍 Проверка установленных пакетов..."
+
+# Проверка Git
 if ! command -v git &> /dev/null; then
-    echo "Installing git..."
+    echo "📦 Установка Git..."
     sudo apt install git -y
 fi
 
-# Check and install python3
+# Проверка Python
 if ! command -v python3 &> /dev/null; then
-    echo "Installing python3..."
+    echo "🐍 Установка Python3..."
     sudo apt install python3 -y
 fi
 
-# Check and install pip
+# Проверка pip
 if ! command -v pip3 &> /dev/null; then
-    echo "Installing pip3..."
+    echo "📦 Установка pip3..."
     sudo apt install python3-pip -y
 fi
 
-# Install requirements
-echo "Installing Python packages..."
-pip3 install -r requirements.txt
+# Создание директории для проекта
+PROJECT_DIR="beautypro"
+if [ ! -d "$PROJECT_DIR" ]; then
+    echo "📁 Создание директории проекта..."
+    mkdir $PROJECT_DIR
+fi
 
-# Create .env file
-echo "Creating .env file..."
-read -p "Enter BOT_TOKEN: " BOT_TOKEN
-read -p "Enter ADMIN_IDS (comma separated): " ADMIN_IDS
-read -p "Enter phone number: " PHONE_NUMBER
-read -p "Enter website URL: " WEBSITE_URL
-read -p "Enter Telegram channel URL: " TELEGRAM_CHANNEL
-read -p "Enter location coordinates (lat,lon): " LOCATION_COORDINATES
+cd $PROJECT_DIR
+
+# Установка зависимостей
+echo "📦 Установка зависимостей из requirements.txt..."
+if [ -f "requirements.txt" ]; then
+    pip3 install -r requirements.txt
+else
+    echo "❌ Файл requirements.txt не найден!"
+    exit 1
+fi
+
+# Создание .env файла
+echo "⚙️ Создание файла конфигурации .env..."
 
 cat > .env << EOF
-BOT_TOKEN=$BOT_TOKEN
-ADMIN_IDS=$ADMIN_IDS
-PHONE_NUMBER=$PHONE_NUMBER
-WEBSITE_URL=$WEBSITE_URL
-TELEGRAM_CHANNEL=$TELEGRAM_CHANNEL
-LOCATION_COORDINATES=$LOCATION_COORDINATES
+# Токен вашего телеграм бота
+BOT_TOKEN=your_bot_token_here
+
+# ID администраторов (через запятую)
+ADMIN_IDS=123456789,987654321
+
+# Контактная информация
+PHONE_NUMBER=+79991234567
+WEBSITE_URL=https://ваш-сайт.ru
+TELEGRAM_CHANNEL=https://t.me/ваш_канал
+LOCATION_COORDINATES=55.7558,37.6173
 EOF
 
-echo ".env file created successfully!"
+echo "📝 Файл .env создан. Пожалуйста, отредактируйте его и добавьте реальные значения."
 
-# Initialize database
-echo "Initializing database..."
+# Создание базы данных
+echo "🗄️ Инициализация базы данных..."
 python3 -c "
-from database import Database
-db = Database()
-print('Database initialized successfully!')
+from database import db
+print('✅ База данных создана успешно!')
 "
 
-echo "Installation completed! You can now run the bot with: python3 main.py"
+echo "🎉 Установка завершена!"
+echo "📋 Далее:"
+echo "1. Отредактируйте файл .env с реальными значениями"
+echo "2. Запустите бота командой: python3 main.py"
+echo "3. Бот готов к работе!"
+
+# Даем права на выполнение скрипта
+chmod +x $0
