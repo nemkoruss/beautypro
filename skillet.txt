@@ -1,0 +1,16 @@
+beautypro-system/
+├── .env
+├── .gitignore
+├── config.py
+├── main.py
+├── client.py
+├── admin.py
+├── database.py
+├── bot.log
+├── requirements.txt
+├── README.md
+├── scripts/
+│   └── install.sh
+└── fonts/
+    ├── DejaVuSans-Bold.ttf
+    └── DejaVuSans.ttf
